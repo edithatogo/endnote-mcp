@@ -6,8 +6,11 @@ the failure surfacing as `CONNECTION_CLOSED` in a client.
 """
 
 import importlib
+import importlib.util
 import json
+import os
 import subprocess
+import sys
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -79,6 +82,17 @@ def test_bundle_entry_point_exists():
     assert (root / "mcpb" / manifest["server"]["entry_point"]).is_file()
 
 
+def test_bundle_exports_its_source_dir_to_subprocesses(monkeypatch):
+    """rebuild_index starts the indexer with `python -m endnote_mcp.cli`. The
+    bundle vendors that package under src/, which only PYTHONPATH reaches."""
+    entry = Path(__file__).resolve().parents[1] / "mcpb" / "src" / "server.py"
+    monkeypatch.setenv("PYTHONPATH", "")
+    monkeypatch.setattr(sys, "path", list(sys.path))
+    spec = importlib.util.spec_from_file_location("_mcpb_entry", entry)
+    spec.loader.exec_module(importlib.util.module_from_spec(spec))
+    assert os.environ["PYTHONPATH"].split(os.pathsep)[0] == str(entry.parent)
+
+
 # mcp 2.x runs sync tools on anyio worker threads and retires idle workers
 # after 10 s, so consecutive calls routinely land on different threads. No tool
 # may depend on the thread that served an earlier call (issues #7 and #8).
@@ -140,3 +154,16 @@ def test_rebuild_index_after_an_earlier_call(server, library, monkeypatch):
     out = _on_new_thread(server.rebuild_index)
     assert out.startswith("Re-indexing complete.")
     assert "References: 1" in out
+
+
+def test_rebuild_index_reports_a_failed_indexer(server, library, monkeypatch):
+    """A failed indexer run must not be reported as a completed one."""
+    monkeypatch.setattr(
+        server.subprocess, "run",
+        lambda *a, **kw: subprocess.CompletedProcess(
+            a, 1, stdout="", stderr="No module named 'endnote_mcp'",
+        ),
+    )
+    out = server.rebuild_index()
+    assert out.startswith("Re-indexing failed (exit code 1).")
+    assert "No module named 'endnote_mcp'" in out

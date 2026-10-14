@@ -18,8 +18,13 @@ import sys
 import threading
 from pathlib import Path
 
-# Make the vendored endnote_mcp package importable.
-sys.path.insert(0, str(Path(__file__).resolve().parent))
+# Make the vendored endnote_mcp package importable, both here and in the
+# indexer subprocess that the rebuild_index tool starts with `-m`.
+_SRC_DIR = str(Path(__file__).resolve().parent)
+sys.path.insert(0, _SRC_DIR)
+os.environ["PYTHONPATH"] = os.pathsep.join(
+    p for p in (_SRC_DIR, os.environ.get("PYTHONPATH")) if p
+)
 
 import yaml  # noqa: E402
 
@@ -83,7 +88,9 @@ def _bootstrap_config() -> Path:
     # endnote_mcp.server._get_config() calls Config.load() with no argument and
     # re-discovers the config on its own, so passing config_path around is not
     # enough. Config.load() checks ENDNOTE_MCP_CONFIG ahead of the platform
-    # config dir, so setting it here covers every later lookup in this process.
+    # config dir, so setting it here covers every later lookup in this process,
+    # and the CLI's --config falls back to it, so the indexer subprocess that
+    # rebuild_index starts reads the same file.
     # It must be set before `from endnote_mcp.server import mcp` in main().
     os.environ["ENDNOTE_MCP_CONFIG"] = str(config_path)
 

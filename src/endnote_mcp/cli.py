@@ -119,7 +119,7 @@ def setup():
 @click.option("--full", is_flag=True, help="Full re-index (clear and rebuild from scratch)")
 @click.option("--skip-pdfs", is_flag=True, help="Skip PDF text extraction (metadata only)")
 @click.option("--embed", is_flag=True, help="Also generate semantic search embeddings (requires endnote-mcp[semantic])")
-@click.option("--config", type=click.Path(exists=True), help="Path to config.yaml")
+@click.option("--config", type=click.Path(exists=True), envvar="ENDNOTE_MCP_CONFIG", help="Path to config.yaml")
 def index(full, skip_pdfs, embed, config):
     """Index your EndNote library into the search database.
 
@@ -151,7 +151,7 @@ def serve():
 # status — Show stats
 # ====================================================================
 @cli.command()
-@click.option("--config", type=click.Path(exists=True), help="Path to config.yaml")
+@click.option("--config", type=click.Path(exists=True), envvar="ENDNOTE_MCP_CONFIG", help="Path to config.yaml")
 def status(config):
     """Show index statistics."""
     config_path = config or get_default_config_path()
@@ -192,7 +192,7 @@ def status(config):
 # ====================================================================
 @cli.command()
 @click.option("--full", is_flag=True, help="Regenerate all embeddings from scratch")
-@click.option("--config", type=click.Path(exists=True), help="Path to config.yaml")
+@click.option("--config", type=click.Path(exists=True), envvar="ENDNOTE_MCP_CONFIG", help="Path to config.yaml")
 def embed(full, config):
     """Generate semantic search embeddings for your references.
 

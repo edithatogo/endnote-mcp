@@ -592,9 +592,12 @@ def rebuild_index() -> str:
             env=env,
             timeout=7200,  # 2 hour timeout for large libraries
         )
-        output = result.stdout
         if result.returncode != 0:
-            output += f"\nErrors:\n{result.stderr}"
+            return (
+                f"Re-indexing failed (exit code {result.returncode}).\n\n"
+                f"Output:\n{result.stdout}\n"
+                f"Errors:\n{result.stderr}"
+            )
 
         # A fresh connection sees what the indexer just wrote.
         with _db() as conn:
@@ -604,7 +607,7 @@ def rebuild_index() -> str:
             f"  References: {stats['total_references']}\n"
             f"  PDFs indexed: {stats['references_with_pdf']}\n"
             f"  PDF pages: {stats['total_pdf_pages']}\n\n"
-            f"Output:\n{output}"
+            f"Output:\n{result.stdout}"
         )
     except subprocess.TimeoutExpired:
         return "Re-indexing timed out after 2 hours. Try running the indexing script manually."
