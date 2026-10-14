@@ -7,9 +7,15 @@ the failure surfacing as `CONNECTION_CLOSED` in a client.
 
 import importlib
 import json
+import subprocess
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import pytest
+
+from endnote_mcp.config import Config
+from endnote_mcp.db import connect, upsert_reference
 
 EXPECTED_TOOLS = {
     "search_references",
@@ -71,3 +77,66 @@ def test_bundle_entry_point_exists():
     root = Path(__file__).resolve().parents[1]
     manifest = json.loads((root / "mcpb" / "manifest.json").read_text("utf-8"))
     assert (root / "mcpb" / manifest["server"]["entry_point"]).is_file()
+
+
+# mcp 2.x runs sync tools on anyio worker threads and retires idle workers
+# after 10 s, so consecutive calls routinely land on different threads. No tool
+# may depend on the thread that served an earlier call (issues #7 and #8).
+
+def _on_new_thread(fn, *args):
+    """Run fn on a fresh thread and return its result, re-raising its error."""
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        return pool.submit(fn, *args).result()
+
+
+@pytest.fixture
+def library(server, sample_ref, tmp_path, monkeypatch):
+    """Point the server at a throwaway on-disk library holding sample_ref."""
+    db_path = tmp_path / "library.db"
+    conn = connect(db_path)
+    upsert_reference(conn, {
+        **sample_ref,
+        "authors": json.dumps(sample_ref["authors"]),
+        "keywords": json.dumps(sample_ref["keywords"]),
+    })
+    conn.commit()
+    conn.close()
+    monkeypatch.setattr(server, "_config", Config(
+        endnote_xml=tmp_path / "library.xml", pdf_dir=tmp_path, db_path=db_path,
+    ))
+    return sample_ref
+
+
+def test_consecutive_calls_on_different_threads(server, library):
+    """The idle-gap case: each call runs on a thread the previous one did not."""
+    title = library["title"]
+    assert title in server.get_reference_details(42)
+    assert title in _on_new_thread(server.get_reference_details, 42)
+    assert title in _on_new_thread(server.search_references, "shipping")
+
+
+def test_concurrent_calls(server, library):
+    """Clients that batch independent calls run them on several threads at once."""
+    workers = 8
+    barrier = threading.Barrier(workers)
+
+    def call(_):
+        barrier.wait()
+        return server.search_references("shipping")
+
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        results = list(pool.map(call, range(workers)))
+    assert all(library["title"] in r for r in results)
+
+
+def test_rebuild_index_after_an_earlier_call(server, library, monkeypatch):
+    """#8: the indexer finished, then reopening the shared connection failed."""
+    server.get_reference_details(42)
+    # Stand in for the indexer subprocess, which would index the real library.
+    monkeypatch.setattr(
+        server.subprocess, "run",
+        lambda *a, **kw: subprocess.CompletedProcess(a, 0, stdout="", stderr=""),
+    )
+    out = _on_new_thread(server.rebuild_index)
+    assert out.startswith("Re-indexing complete.")
+    assert "References: 1" in out

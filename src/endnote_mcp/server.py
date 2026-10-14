@@ -7,6 +7,7 @@ import logging
 import os
 import subprocess
 import sys
+from contextlib import contextmanager
 from pathlib import Path
 
 try:  # mcp >= 2.0 renamed FastMCP to MCPServer
@@ -48,7 +49,6 @@ mcp = _Server(
 
 # --- Lazy globals (initialized on first tool call) ---
 _config: Config | None = None
-_conn = None
 
 
 def _get_config() -> Config:
@@ -58,12 +58,22 @@ def _get_config() -> Config:
     return _config
 
 
-def _get_conn():
-    global _conn
-    if _conn is None:
-        cfg = _get_config()
-        _conn = connect(cfg.db_path)
-    return _conn
+@contextmanager
+def _db():
+    """Open a database connection for the duration of one tool call.
+
+    mcp 2.x runs sync tools on anyio worker threads, which come and go (idle
+    workers are retired after 10 s), and a sqlite3 connection refuses to be
+    used from any thread but the one that opened it. A connection shared
+    across calls therefore failed on the first call after an idle gap.
+    Opening one per call costs under a millisecond, even on a large library,
+    and leaves no connection shared between threads.
+    """
+    conn = connect(_get_config().db_path)
+    try:
+        yield conn
+    finally:
+        conn.close()
 
 
 # ====================================================================
@@ -92,11 +102,11 @@ def search_references(
         ref_type: Optional reference type filter (e.g. "Journal Article", "Book", "Patent").
         limit: Maximum results to return (default 50).
     """
-    conn = _get_conn()
-    results = _search_refs(
-        conn, query, year_from=year_from, year_to=year_to, author=author,
-        ref_type=ref_type, limit=limit, search_notes=_get_config().search_notes,
-    )
+    with _db() as conn:
+        results = _search_refs(
+            conn, query, year_from=year_from, year_to=year_to, author=author,
+            ref_type=ref_type, limit=limit, search_notes=_get_config().search_notes,
+        )
     if not results:
         return f"No references found for: {query}"
     lines = [f"Found {len(results)} reference(s):\n"]
@@ -128,8 +138,8 @@ def search_fulltext(query: str, limit: int = 50) -> str:
             phrases" and the uppercase operators AND, OR and NOT are honoured.
         limit: Maximum references to return (default 50).
     """
-    conn = _get_conn()
-    results = _search_ft(conn, query, limit=limit)
+    with _db() as conn:
+        results = _search_ft(conn, query, limit=limit)
     if not results:
         return f"No fulltext matches for: {query}"
     total_snippets = sum(len(r["snippets"]) for r in results)
@@ -171,12 +181,12 @@ def search_library(
         ref_type: Optional reference type filter (e.g. "Journal Article", "Book", "Patent").
         limit: Maximum references to return (default 30).
     """
-    conn = _get_conn()
-    results = _search_lib(
-        conn, query,
-        year_from=year_from, year_to=year_to, author=author,
-        ref_type=ref_type, limit=limit, search_notes=_get_config().search_notes,
-    )
+    with _db() as conn:
+        results = _search_lib(
+            conn, query,
+            year_from=year_from, year_to=year_to, author=author,
+            ref_type=ref_type, limit=limit, search_notes=_get_config().search_notes,
+        )
     if not results:
         return f"No references found for: {query}"
 
@@ -210,8 +220,8 @@ def get_reference_details(rec_number: int) -> str:
     Args:
         rec_number: The EndNote record number (shown in search results as [number]).
     """
-    conn = _get_conn()
-    ref = _get_details(conn, rec_number)
+    with _db() as conn:
+        ref = _get_details(conn, rec_number)
     if ref is None:
         return f"Reference #{rec_number} not found."
 
@@ -265,8 +275,8 @@ def get_citation(rec_number: int, style: str = "apa7") -> str:
         rec_number: The EndNote record number.
         style: Citation style — one of: apa7, harvard, vancouver, chicago, ieee.
     """
-    conn = _get_conn()
-    ref = _get_details(conn, rec_number)
+    with _db() as conn:
+        ref = _get_details(conn, rec_number)
     if ref is None:
         return f"Reference #{rec_number} not found."
 
@@ -291,9 +301,8 @@ def read_pdf_section(rec_number: int, start_page: int = 1, end_page: int = 5) ->
         end_page: Last page to read (1-based, default 5).
     """
     cfg = _get_config()
-    conn = _get_conn()
-
-    ref = _get_details(conn, rec_number)
+    with _db() as conn:
+        ref = _get_details(conn, rec_number)
     if ref is None:
         return f"Reference #{rec_number} not found."
 
@@ -350,11 +359,11 @@ def list_references_by_topic(
         ref_type: Optional reference type filter (e.g. "Journal Article", "Book", "Patent").
         limit: Maximum results (default 50).
     """
-    conn = _get_conn()
-    results = _list_topic(
-        conn, topic, year_from=year_from, year_to=year_to, ref_type=ref_type,
-        limit=limit, search_notes=_get_config().search_notes,
-    )
+    with _db() as conn:
+        results = _list_topic(
+            conn, topic, year_from=year_from, year_to=year_to, ref_type=ref_type,
+            limit=limit, search_notes=_get_config().search_notes,
+        )
     if not results:
         return f"No references found for topic: {topic}"
     lines = [f"Found {len(results)} reference(s) on '{topic}':\n"]
@@ -384,12 +393,12 @@ def find_related(rec_number: int, limit: int = 10) -> str:
         rec_number: The record number to find related references for.
         limit: Maximum results (default 10).
     """
-    conn = _get_conn()
-    ref = _get_details(conn, rec_number)
-    if ref is None:
-        return f"Reference #{rec_number} not found."
+    with _db() as conn:
+        ref = _get_details(conn, rec_number)
+        if ref is None:
+            return f"Reference #{rec_number} not found."
 
-    results = _find_related(conn, rec_number, limit=limit)
+        results = _find_related(conn, rec_number, limit=limit)
     if not results:
         return f"No related references found for #{rec_number}."
 
@@ -432,8 +441,8 @@ def get_bibliography(
     if not numbers:
         return "No record numbers provided."
 
-    conn = _get_conn()
-    refs = _get_refs_batch(conn, numbers)
+    with _db() as conn:
+        refs = _get_refs_batch(conn, numbers)
     if not refs:
         return "None of the specified references were found."
 
@@ -498,15 +507,14 @@ def search_semantic(query: str, limit: int = 20) -> str:
             "Then run: endnote-mcp embed"
         )
 
-    conn = _get_conn()
+    with _db() as conn:
+        if not embeddings.has_embeddings(conn):
+            return (
+                "No embeddings found. Generate them first:\n"
+                "  endnote-mcp embed"
+            )
 
-    if not embeddings.has_embeddings(conn):
-        return (
-            "No embeddings found. Generate them first:\n"
-            "  endnote-mcp embed"
-        )
-
-    results = _search_semantic(conn, query, limit=limit)
+        results = _search_semantic(conn, query, limit=limit)
     if not results:
         return f"No semantic matches for: {query}"
 
@@ -543,8 +551,8 @@ def get_bibtex(rec_numbers: str) -> str:
     if not numbers:
         return "No record numbers provided."
 
-    conn = _get_conn()
-    refs = _get_refs_batch(conn, numbers)
+    with _db() as conn:
+        refs = _get_refs_batch(conn, numbers)
     if not refs:
         return "None of the specified references were found."
 
@@ -572,7 +580,6 @@ def rebuild_index() -> str:
     This will re-parse the XML and re-extract all PDFs.
     """
     try:
-        cfg = _get_config()
         # Force UTF-8 in subprocess stdio so non-ASCII output doesn't crash
         # on Windows code pages (cp950 zh-TW, cp932 ja, cp949 ko, etc.).
         env = {**os.environ, "PYTHONIOENCODING": "utf-8", "PYTHONUTF8": "1"}
@@ -589,13 +596,9 @@ def rebuild_index() -> str:
         if result.returncode != 0:
             output += f"\nErrors:\n{result.stderr}"
 
-        # Reconnect to pick up new data
-        global _conn
-        if _conn:
-            _conn.close()
-        _conn = connect(cfg.db_path)
-
-        stats = get_stats(_conn)
+        # A fresh connection sees what the indexer just wrote.
+        with _db() as conn:
+            stats = get_stats(conn)
         return (
             f"Re-indexing complete.\n"
             f"  References: {stats['total_references']}\n"
