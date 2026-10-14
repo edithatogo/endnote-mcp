@@ -1,4 +1,4 @@
-"""Extract text from PDFs using PyMuPDF (fitz)."""
+"""Extract text from PDFs using PyMuPDF."""
 
 from __future__ import annotations
 
@@ -12,7 +12,9 @@ from pathlib import Path
 from typing import Generator
 from urllib.parse import unquote
 
-import fitz  # PyMuPDF
+# Not `import fitz`: since PyMuPDF 1.28.2 that prints a deprecation warning to
+# stdout, which is the MCP protocol channel when the server runs over stdio.
+import pymupdf
 
 
 @contextlib.contextmanager
@@ -88,7 +90,7 @@ def extract_pages(pdf_path: str | Path, timeout: int = 30) -> list[tuple[int, st
 
     try:
         with _suppress_stderr():
-            doc = fitz.open(str(pdf_path))
+            doc = pymupdf.open(str(pdf_path))
     except _PdfTimeout:
         logger.warning("Timeout opening PDF %s", pdf_path.name)
         return []
@@ -135,7 +137,7 @@ def read_pages(pdf_path: str | Path, start: int, end: int) -> list[dict]:
         raise FileNotFoundError(f"PDF not found: {pdf_path}")
 
     with _suppress_stderr():
-        doc = fitz.open(str(pdf_path))
+        doc = pymupdf.open(str(pdf_path))
     results = []
     try:
         total = len(doc)

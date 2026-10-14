@@ -29,7 +29,7 @@ dependencies = [
     # server.py supports both majors (mcp 2.0 renamed FastMCP -> MCPServer)
     "mcp[cli]>=1.0.0",
     "lxml>=5.0",
-    "PyMuPDF>=1.24",
+    "PyMuPDF>=1.24.3",  # first release with the `pymupdf` module name
     "pyyaml>=6.0",
     "click>=8.0",
     "rich>=13.0",
