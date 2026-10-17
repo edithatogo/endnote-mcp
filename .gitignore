@@ -7,8 +7,11 @@ build/
 .venv/
 *.egg
 
-# Database
+# Database (SQLite's WAL-mode side files hold library data too)
 *.db
+*.db-wal
+*.db-shm
+*.db-journal
 
 # IDE
 .vscode/
@@ -29,3 +32,11 @@ uv.lock
 # MCPB bundle build artifacts (package source is synced from src/ on each build)
 mcpb/src/endnote_mcp/
 mcpb/.venv/
+
+# Logs
+*.log
+
+# MCP Registry publisher and the credentials it saves to the working directory
+# (releases publish from CI via OIDC)
+mcp-publisher
+.mcpregistry_*
