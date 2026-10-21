@@ -19,21 +19,63 @@ def test_prepare_disabled(tmp_path):
     assert not (tmp_path/'b').exists()
 
 
-@pytest.mark.parametrize('kind', ['escape', 'symlink', 'existing', 'relative'])
-def test_destination_guards(tmp_path, kind):
+@pytest.fixture
+def valid_preparation(tmp_path):
+    import json
+    from test_word_prepare import fixture
     root = tmp_path/'work'; root.mkdir()
-    source = tmp_path/'source.docx'; source.write_bytes(b'fictional')
+    source, digest, plan = fixture(root)
+    plan_path = root/'plan.json'; plan_path.write_text(json.dumps(plan))
+    cfg = Config(source,tmp_path,tmp_path/'db',native_working_root=root)
+    return root, source, plan_path, digest, cfg
+
+
+@pytest.mark.parametrize('kind', [
+    'escape', 'symlink', 'existing', 'relative', 'source_alias', 'plan_alias',
+])
+def test_destination_guards(tmp_path, monkeypatch, valid_preparation, kind):
+    root, source, plan_path, digest, cfg = valid_preparation
     dest = root/'out.docx'
     if kind == 'escape': dest = tmp_path/'outside.docx'
     if kind == 'symlink':
-        (root/'link').symlink_to(tmp_path, target_is_directory=True)
+        outside = tmp_path/'outside'; outside.mkdir()
+        (root/'link').symlink_to(outside, target_is_directory=True)
         dest = root/'link'/'out.docx'
     if kind == 'existing': dest.write_bytes(b'preserve')
-    if kind == 'relative': dest = Path('out.docx')
-    cfg = Config(source,tmp_path,tmp_path/'db',native_working_root=root)
-    result = tools.prepare_word_endnote_conversion(str(source),str(dest),'absent','0'*64,config=cfg)
+    if kind == 'relative':
+        monkeypatch.chdir(root)
+        dest = Path('out.docx')
+    if kind == 'source_alias': dest = source
+    if kind == 'plan_alias': dest = plan_path
+    before = {p: p.read_bytes() for p in (source, plan_path, dest) if p.is_file()}
+    def unexpected_core(*args):
+        raise AssertionError('Destination guard allowed the core to run')
+    monkeypatch.setattr(tools, 'prepare_conversion', unexpected_core)
+    result = tools.prepare_word_endnote_conversion(
+        str(source), str(dest), str(plan_path), digest, config=cfg)
     assert result['status'] == 'error'
     assert result['error_code'] == 'invalid_request'
+    for path, original in before.items():
+        assert path.read_bytes() == original
+    if dest not in before:
+        assert not dest.exists()
+
+
+def test_destination_guard_positive_control(monkeypatch, valid_preparation):
+    root, source, plan_path, digest, cfg = valid_preparation
+    calls = []
+    core = tools.prepare_conversion
+    def observed_core(*args):
+        calls.append(args)
+        return core(*args)
+    monkeypatch.setattr(tools, 'prepare_conversion', observed_core)
+    dest = root/'out.docx'
+    result = tools.prepare_word_endnote_conversion(
+        str(source), str(dest), str(plan_path), digest, config=cfg)
+    assert len(calls) == 1
+    assert result['status'] == 'prepared' and dest.is_file()
+    assert result['source_sha256'] == digest
+    assert result['native_fields_created'] is False
 
 
 def test_audit_error_does_not_disclose_text():
