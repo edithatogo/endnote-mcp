@@ -10,6 +10,7 @@ import base64
 import binascii
 import hashlib
 from pathlib import Path
+from io import BytesIO
 import re
 import xml.etree.ElementTree as ET
 from zipfile import ZipFile, BadZipFile
@@ -85,7 +86,7 @@ def audit_document(path: Path, expected_groups=None, record_map=None,
     result['library_identity_verified'] = False
     errors = result['errors']
     try:
-        with ZipFile(path) as z:
+        with ZipFile(BytesIO(raw)) as z:
             if len(z.namelist()) != len(set(z.namelist())):
                 raise ValueError('Duplicate ZIP parts')
             doc = xml(z.read('word/document.xml'))

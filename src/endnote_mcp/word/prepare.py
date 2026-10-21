@@ -15,6 +15,7 @@ explicit remove=true. Fields, content controls and human revisions cannot be
 edited. Unmodified ZIP part bytes are preserved, including comments and rels.
 """
 from pathlib import Path
+from io import BytesIO
 import re
 from zipfile import ZipFile, BadZipFile
 from lxml import etree
@@ -39,7 +40,7 @@ def prepare_conversion(source: Path, destination: Path, plan: dict,
     if not isinstance(citations, list) or not citations or not isinstance(bibliography, list):
         raise ValueError('Plan requires citation list and bibliography list')
     try:
-        with ZipFile(source) as z:
+        with ZipFile(BytesIO(raw)) as z:
             infos = z.infolist()
             if len({i.filename for i in infos}) != len(infos):
                 raise ValueError('Duplicate ZIP parts')

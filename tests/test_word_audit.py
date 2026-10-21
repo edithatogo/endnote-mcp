@@ -123,3 +123,19 @@ class EndNoteAuditTests(unittest.TestCase):
 
 
 if __name__=='__main__':unittest.main()
+
+
+def test_audit_uses_hashed_snapshot(tmp_path, monkeypatch):
+    import hashlib
+    source=tmp_path/'snapshot.docx'
+    original=b'not-a-zip snapshot A'
+    source.write_bytes(original)
+    actual_zip=m.ZipFile
+    def replace_before_open(target, *args, **kwargs):
+        with actual_zip(source,'w') as z:
+            z.writestr('word/document.xml',f'<w:document xmlns:w="{W}"><w:body/></w:document>')
+        return actual_zip(target,*args,**kwargs)
+    monkeypatch.setattr(m,'ZipFile',replace_before_open)
+    result=m.audit_document(source)
+    assert result['docx_sha256']==hashlib.sha256(original).hexdigest()
+    assert any('zip' in error.lower() for error in result['errors'])

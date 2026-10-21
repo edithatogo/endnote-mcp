@@ -146,3 +146,36 @@ def test_endnote_code_only_field_rejected(tmp_path):
     h=rewrite_source(s,p,b'</w:body>',fragment+b'</w:body>')
     with pytest.raises(ValueError,match='separator'): prepare_conversion(s,d,p,h)
     assert not d.exists()
+
+
+def test_preparation_parses_captured_bytes_during_aba(tmp_path, monkeypatch):
+    import endnote_mcp.word.prepare as module
+    s,h,p=fixture(tmp_path);d=tmp_path/'new.docx'
+    original=s.read_bytes()
+    with ZipFile(s) as z: parts={n:z.read(n) for n in z.namelist()}
+    parts['word/document.xml']=parts['word/document.xml'].replace(b'Example [1].',b'Changed [1].')
+    actual_zip=module.ZipFile
+    class ReplaceRestoreZip(actual_zip):
+        def __init__(self,target,*args,**kwargs):
+            # Simulate replacement after source capture, then restore A after
+            # ZIP parsing, before preparation's final source recheck.
+            if not args and not kwargs:
+                with actual_zip(s,'w') as z:
+                    for n,v in parts.items(): z.writestr(n,v)
+                super().__init__(target,*args,**kwargs)
+                self.restore=True
+            else:
+                super().__init__(target,*args,**kwargs)
+                self.restore=False
+        def __exit__(self,*args):
+            result=super().__exit__(*args)
+            if self.restore: s.write_bytes(original)
+            return result
+    monkeypatch.setattr(module,'ZipFile',ReplaceRestoreZip)
+    receipt=module.prepare_conversion(s,d,p,h)
+    assert receipt['source_sha256']==h
+    assert s.read_bytes()==original
+    with actual_zip(d) as z:
+        xml=z.read('word/document.xml')
+        assert b'Example {Example, 2020 #7}.' in xml
+        assert b'Changed' not in xml
