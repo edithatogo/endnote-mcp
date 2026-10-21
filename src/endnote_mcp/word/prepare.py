@@ -13,8 +13,9 @@ authentic single-record tokens are permitted. Each token must contain exactly
 one matching #record ID; grouped tokens are unsupported until the plan schema
 provides explicit group bindings. All citations must share one database_id, which
 is retained with per-anchor record/token bindings in the receipt. Bibliography removal requires exact whole-paragraph text and
-explicit remove=true. Fields, content controls and human revisions cannot be
-edited. Unmodified ZIP part bytes are preserved, including comments and rels.
+explicit remove=true. Paragraphs with section properties or comment/bookmark
+attachments cannot be removed. Fields, content controls and human revisions
+cannot be edited. Unmodified ZIP part bytes are preserved, including comments and rels.
 """
 from pathlib import Path
 from io import BytesIO
@@ -99,12 +100,16 @@ def prepare_conversion(source: Path, destination: Path, plan: dict,
         spans.append((start, end, token))
         changes.append((node, start, end, token))
     removals = []
+    attachment_tags = {W+name for name in (
+        'sectPr', 'bookmarkStart', 'bookmarkEnd', 'commentRangeStart',
+        'commentRangeEnd', 'commentReference')}
     for b in bibliography:
         if not isinstance(b, dict) or b.get('remove') is not True:
             raise ValueError('Bibliography removal requires explicit authorization')
         p = indexed(paragraphs, b.get('paragraph_index'))
         if (not b.get('original_text') or text(p) != b['original_text']
                 or p in removals or protected(p)
+                or any(n.tag in attachment_tags for n in p.iter())
                 or any(n in occupied for n in p.iter())):
             raise ValueError('Ambiguous or protected bibliography paragraph')
         removals.append(p)

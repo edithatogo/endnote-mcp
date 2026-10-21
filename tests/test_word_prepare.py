@@ -217,3 +217,58 @@ def test_single_record_token_forms(tmp_path,token):
     assert receipt['citation_bindings'][0]['native_record_id']==7
     with ZipFile(d) as z:
         assert token.encode() in z.read('word/document.xml')
+
+
+@pytest.mark.parametrize('protected_fragment',[
+    '<w:pPr><w:sectPr><w:pgSz w:w="12240" w:h="15840"/></w:sectPr></w:pPr>',
+    '<w:bookmarkStart w:id="42" w:name="fictional"/>',
+    '<w:bookmarkEnd w:id="42"/>',
+    '<w:commentRangeStart w:id="42"/>',
+    '<w:commentRangeEnd w:id="42"/>',
+    '<w:r><w:commentReference w:id="42"/></w:r>',
+])
+def test_bibliography_removal_preserves_layout_and_attachment_anchors(tmp_path,protected_fragment):
+    s,h,p=fixture(tmp_path);d=tmp_path/'new.docx'
+    h=rewrite_source(s,p,b'<w:p><w:r><w:t>Literal reference',
+                     ('<w:p>'+protected_fragment+'<w:r><w:t>Literal reference').encode())
+    # Pair range boundaries across paragraphs so removing only the bibliography
+    # would orphan a previously attached bookmark/comment in the retained text.
+    if 'RangeStart' in protected_fragment or 'bookmarkStart' in protected_fragment:
+        end='bookmarkEnd' if 'bookmarkStart' in protected_fragment else 'commentRangeEnd'
+        h=rewrite_source(s,p,b'</w:body>',
+                         ('<w:p><w:'+end+' w:id="42"/></w:p></w:body>').encode())
+    elif 'RangeEnd' in protected_fragment or 'bookmarkEnd' in protected_fragment:
+        start='bookmarkStart w:name="fictional"' if 'bookmarkEnd' in protected_fragment else 'commentRangeStart'
+        h=rewrite_source(s,p,b'<w:body><w:p>',
+                         ('<w:body><w:p><w:'+start+' w:id="42"/>').encode())
+    original=s.read_bytes()
+    with pytest.raises(ValueError,match='protected bibliography'):
+        prepare_conversion(s,d,p,h)
+    assert not d.exists()
+    assert s.read_bytes()==original
+
+
+@pytest.mark.parametrize('encoding',['utf-8','utf-16-le','utf-16-be','utf-32-le','utf-32-be','iso-8859-1'])
+@pytest.mark.parametrize('declaration',[
+    '',
+    '<!DOCTYPE w:document>',
+    '<!DOCTYPE w:document [<!ENTITY injected "Literal reference">]>',
+])
+def test_preparation_encoded_xml_declarations(tmp_path,encoding,declaration):
+    s,h,p=fixture(tmp_path);d=tmp_path/'new.docx'
+    with ZipFile(s) as z: raw=z.read('word/document.xml')
+    content=raw.decode()
+    if '<!ENTITY' in declaration:
+        content=content.replace('Literal reference','&injected;')
+    encoded=('<?xml version="1.0" encoding="'+encoding+'"?>'+declaration+content).encode(encoding)
+    h=rewrite_source(s,p,raw,encoded)
+    original=s.read_bytes()
+    if declaration:
+        with pytest.raises(ValueError,match='DTD/entity declarations are forbidden'):
+            prepare_conversion(s,d,p,h)
+        assert not d.exists()
+    else:
+        assert prepare_conversion(s,d,p,h)['status']=='prepared'
+        with ZipFile(d) as z:
+            assert b'{Example, 2020 #7}' in z.read('word/document.xml')
+    assert s.read_bytes()==original

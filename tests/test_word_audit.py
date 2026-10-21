@@ -3,6 +3,7 @@ import importlib.util
 from pathlib import Path
 import tempfile
 import unittest
+import pytest
 from zipfile import ZipFile
 
 from endnote_mcp.word import audit as m
@@ -139,3 +140,45 @@ def test_audit_uses_hashed_snapshot(tmp_path, monkeypatch):
     result=m.audit_document(source)
     assert result['docx_sha256']==hashlib.sha256(original).hexdigest()
     assert any('zip' in error.lower() for error in result['errors'])
+
+
+@pytest.mark.parametrize('record_id',[0,-1])
+def test_nonpositive_payload_identity_without_optional_expectations(record_id):
+    result=EndNoteAuditTests().audit(field(payload(n=record_id)))
+    assert not result['passed']
+    assert any('Invalid citation payload' in error and 'positive' in error for error in result['errors'])
+    assert result['groups'][0]['native_record_ids']==[]
+    assert result['identities']==[]
+
+
+@pytest.mark.parametrize('encoding',['utf-8','utf-16-le','utf-16-be','iso-8859-1'])
+@pytest.mark.parametrize('part',['document','styles','settings'])
+@pytest.mark.parametrize('declaration_kind',['none','dtd','entity'])
+def test_audit_encoded_xml_declarations(tmp_path,encoding,part,declaration_kind):
+    bib='<w:sdt><w:sdtPr><w:tag w:val="EndNote.ReferenceList"/></w:sdtPr><w:sdtContent><w:p><w:r><w:t>1 Fictional reference</w:t></w:r></w:p></w:sdtContent></w:sdt>'
+    parts={
+        'document':f'<w:document xmlns:w="{W}"><w:body>{field()}{bib}</w:body></w:document>',
+        'styles':f'<w:styles xmlns:w="{W}"><w:style w:styleId="Derived"><w:rPr><w:vertAlign w:val="superscript"/></w:rPr></w:style></w:styles>',
+        'settings':f'<w:settings xmlns:w="{W}"><w:trackRevisions/></w:settings>',
+    }
+    declaration=''
+    if declaration_kind=='dtd': declaration=f'<!DOCTYPE w:{part}>'
+    if declaration_kind=='entity':
+        declaration=f'<!DOCTYPE w:{part} [<!ENTITY injected "Fictional reference">]>'
+        if part=='document': parts[part]=parts[part].replace('Fictional reference','&injected;')
+    xml_encoding='UTF-16' if encoding.startswith('utf-16') else encoding
+    parts[part]=('<?xml version="1.0" encoding="'+xml_encoding+'"?>'+declaration+parts[part]).encode(encoding)
+    if encoding=='utf-16-le': parts[part]=b'\xff\xfe'+parts[part]
+    if encoding=='utf-16-be': parts[part]=b'\xfe\xff'+parts[part]
+    source=tmp_path/'encoded.docx'
+    with ZipFile(source,'w') as z:
+        for name,content in parts.items(): z.writestr('word/'+name+'.xml',content)
+    original=source.read_bytes()
+    result=m.audit_document(source)
+    if declaration_kind=='none':
+        assert result['passed'],result['errors']
+    else:
+        assert not result['passed']
+        assert any('DTD/entity declarations are forbidden' in error for error in result['errors'])
+        assert result['bibliography']==[]
+    assert source.read_bytes()==original

@@ -8,9 +8,13 @@ def sha256(raw: bytes) -> str:
     return hashlib.sha256(raw).hexdigest()
 
 def parse_xml(raw: bytes):
-    if b'<!DOCTYPE' in raw.upper() or b'<!ENTITY' in raw.upper():
+    # Let libxml2 detect the encoding, but never load a DTD or expand entities.
+    # Entity declarations require a DTD; reject it before exposing the tree.
+    root = etree.fromstring(raw, etree.XMLParser(
+        resolve_entities=False, load_dtd=False, no_network=True))
+    if root.getroottree().docinfo.doctype:
         raise ValueError('DTD/entity declarations are forbidden')
-    return etree.fromstring(raw, etree.XMLParser(resolve_entities=False, no_network=True))
+    return root
 
 def text(element) -> str:
     return ''.join(n.text or '' for n in element.iter(W+'t'))

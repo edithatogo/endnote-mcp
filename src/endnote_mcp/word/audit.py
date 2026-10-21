@@ -19,10 +19,14 @@ from .models import field_structure
 W = '{http://schemas.openxmlformats.org/wordprocessingml/2006/main}'
 
 
-def xml(raw):
-    if b'<!DOCTYPE' in raw.upper() or b'<!ENTITY' in raw.upper():
+class _NoDTDTreeBuilder(ET.TreeBuilder):
+    def doctype(self, name, pubid, system):
+        # Called after encoding detection, before any internal entity expansion.
         raise ValueError('DTD/entity declarations are forbidden')
-    return ET.fromstring(raw)
+
+
+def xml(raw):
+    return ET.fromstring(raw, parser=ET.XMLParser(target=_NoDTDTreeBuilder()))
 
 
 def txt(e):
@@ -170,6 +174,7 @@ def audit_document(path: Path, expected_groups=None, record_map=None,
             if not cites: raise ValueError('EndNote payload contains no Cite')
             for c in cites:
                 n=int(c.findtext('RecNum','')); label=c.findtext('IDText','')
+                if n < 1: raise ValueError('Native record ID must be positive')
                 record=c.find('record')
                 if record is None: raise ValueError('Missing embedded record')
                 if record.findtext('rec-number')!=str(n): raise ValueError('Embedded record ID mismatch')
