@@ -9,7 +9,9 @@ Citation-plan JSON schema (all indices zero-based in main-document traversal):
 
 Each citation anchor identifies exactly one occurrence within a single w:t in
 its indexed run. Distinct nonoverlapping spans may share a text node; repeated
-authentic tokens are permitted. All citations must share one database_id, which
+authentic single-record tokens are permitted. Each token must contain exactly
+one matching #record ID; grouped tokens are unsupported until the plan schema
+provides explicit group bindings. All citations must share one database_id, which
 is retained with per-anchor record/token bindings in the receipt. Bibliography removal requires exact whole-paragraph text and
 explicit remove=true. Fields, content controls and human revisions cannot be
 edited. Unmodified ZIP part bytes are preserved, including comments and rels.
@@ -76,8 +78,8 @@ def prepare_conversion(source: Path, destination: Path, plan: dict,
                 or c['native_record_id'] < 1 or not isinstance(c.get('database_id'), str)
                 or not c['database_id']):
             raise ValueError('Incomplete citation identity or text')
-        if not re.fullmatch(r'\{[^{}\n]*#' + str(c['native_record_id']) + r'\}', token):
-            raise ValueError('Temporary token must match native record identity')
+        if not re.fullmatch(r'\{[^{}#;\r\n]*#' + str(c['native_record_id']) + r'\}', token):
+            raise ValueError('Temporary token must contain one matching native record identity; groups are unsupported')
         if database_id is None: database_id = c['database_id']
         if c['database_id'] != database_id:
             raise ValueError('Mixed database scope is unsupported')

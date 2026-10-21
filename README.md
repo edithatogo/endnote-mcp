@@ -292,6 +292,10 @@ that root; symlink components, existing outputs and input/output aliases are
 rejected. The core checks the source SHA-256, exact anchors, field/revision
 protection and explicit bibliography removals before exclusive output creation.
 The citation-plan JSON schema is documented in `endnote_mcp.word.prepare`.
+Preparation supports one native record per temporary token, including repeated
+single-record tokens at distinct anchors. Grouped temporary-token preparation is
+unsupported until explicit group bindings exist; native field auditing still
+supports citation groups.
 Keep originals and inspect the resulting copy. On preflight failure correct the
 request and choose a new output; never assume conversion ran. Hashes and explicit
 stage/status/limitations distinguish preparation from audit. Generic errors omit

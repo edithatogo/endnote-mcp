@@ -179,3 +179,41 @@ def test_preparation_parses_captured_bytes_during_aba(tmp_path, monkeypatch):
         xml=z.read('word/document.xml')
         assert b'Example {Example, 2020 #7}.' in xml
         assert b'Changed' not in xml
+
+
+@pytest.mark.parametrize('token',[
+    '{Other, 2000 #999; Example, 2020 #7}',
+    '{Example, 2020 #7; Example, 2020 #7}',
+    '{Other #999 Example, 2020 #7}',
+    '{Example #oops, 2020 #7}',
+    '{Example ##7}',
+    '{Example; 2020 #7}',
+    '{Example\r, 2020 #7}',
+    '{Example\n, 2020 #7}',
+    '{Example, 2020 #8}',
+    '{Example, 2020 #07}',
+])
+def test_token_requires_exactly_one_bound_record(tmp_path,token):
+    s,h,p=fixture(tmp_path);d=tmp_path/'new.docx'
+    p['citations'][0]['temporary_token']=token
+    with pytest.raises(ValueError,match='Temporary token'):
+        prepare_conversion(s,d,p,h)
+    assert not d.exists()
+    assert hashlib.sha256(s.read_bytes()).hexdigest()==h
+
+
+@pytest.mark.parametrize('token',[
+    '{Example, 2020 #7}',
+    '{World Health Organization, 2020 #7}',
+    '{World Health Organization, #7}',
+    '{Example, n.d. #7}',
+    '{#7}',
+])
+def test_single_record_token_forms(tmp_path,token):
+    s,h,p=fixture(tmp_path);d=tmp_path/'new.docx'
+    p['citations'][0]['temporary_token']=token
+    receipt=prepare_conversion(s,d,p,h)
+    assert receipt['citation_bindings'][0]['temporary_token']==token
+    assert receipt['citation_bindings'][0]['native_record_id']==7
+    with ZipFile(d) as z:
+        assert token.encode() in z.read('word/document.xml')
