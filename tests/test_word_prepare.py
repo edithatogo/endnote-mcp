@@ -109,7 +109,7 @@ def test_mixed_library_rejected(tmp_path,record):
     '<w:instrText>ORPHAN</w:instrText>',
     '<w:fldData>ORPHAN</w:fldData>',
     '<w:fldChar w:fldCharType="begin"/><w:fldChar w:fldCharType="separate"/><w:instrText>LATE</w:instrText><w:fldChar w:fldCharType="end"/>',
-    '<w:fldChar w:fldCharType="begin"/><w:fldChar w:fldCharType="end"/>',
+    '<w:fldChar w:fldCharType="begin"/><w:instrText> ADDIN EN.JS.CITE </w:instrText><w:fldChar w:fldCharType="end"/>',
 ])
 def test_all_malformed_field_phases_rejected(tmp_path,fragment):
     s,h,p=fixture(tmp_path); d=tmp_path/'new.docx'
@@ -132,3 +132,17 @@ def test_repeated_authentic_token_in_separate_paragraphs(tmp_path):
     assert receipt['citation_count']==2
     with ZipFile(d) as z:
         assert z.read('word/document.xml').count(b'{Example, 2020 #7}')==2
+
+def test_generic_code_only_field_preserved(tmp_path):
+    s,h,p=fixture(tmp_path);d=tmp_path/'new.docx'
+    fragment=b'<w:p><w:r><w:fldChar w:fldCharType="begin"/><w:instrText> DATE </w:instrText><w:fldChar w:fldCharType="end"/></w:r></w:p>'
+    h=rewrite_source(s,p,b'</w:body>',fragment+b'</w:body>')
+    prepare_conversion(s,d,p,h)
+    with ZipFile(d) as z: assert fragment in z.read('word/document.xml')
+
+def test_endnote_code_only_field_rejected(tmp_path):
+    s,h,p=fixture(tmp_path);d=tmp_path/'new.docx'
+    fragment=b'<w:p><w:r><w:fldChar w:fldCharType="begin"/><w:instrText> ADDIN EN.JS.CITE </w:instrText><w:fldChar w:fldCharType="end"/></w:r></w:p>'
+    h=rewrite_source(s,p,b'</w:body>',fragment+b'</w:body>')
+    with pytest.raises(ValueError,match='separator'): prepare_conversion(s,d,p,h)
+    assert not d.exists()

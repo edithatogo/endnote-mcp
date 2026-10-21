@@ -32,6 +32,13 @@ class EndNoteAuditTests(unittest.TestCase):
     def test_cross_paragraph_split_instruction_nested_style_repeat(self):
         r=self.audit(field(nested=True)+field(),expected_groups=[[7],[7]])
         self.assertTrue(r['passed'],r['errors']);self.assertTrue(r['track_changes']);self.assertEqual(len(r['identities']),1)
+    def test_unrelated_code_only_complex_field(self):
+        r=self.audit(field()+'<w:p><w:r><w:fldChar w:fldCharType="begin"/><w:instrText> DATE </w:instrText><w:fldChar w:fldCharType="end"/></w:r></w:p>')
+        self.assertTrue(r['passed'],r['errors'])
+    def test_endnote_code_only_field_missing_separator(self):
+        r=self.audit(field().replace('<w:fldChar w:fldCharType="separate"/>',''))
+        self.assertFalse(r['passed'])
+        self.assertTrue(any('separator' in e for e in r['errors']))
     def test_unrelated_simple_field(self):
         r=self.audit(field()+'<w:p><w:fldSimple w:instr="PAGE"><w:r><w:t>2</w:t></w:r></w:fldSimple></w:p>')
         self.assertTrue(r['passed'],r['errors'])
