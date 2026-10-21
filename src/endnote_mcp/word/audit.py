@@ -13,6 +13,7 @@ from pathlib import Path
 import re
 import xml.etree.ElementTree as ET
 from zipfile import ZipFile, BadZipFile
+from .models import field_structure
 
 W = '{http://schemas.openxmlformats.org/wordprocessingml/2006/main}'
 
@@ -92,6 +93,10 @@ def audit_document(path: Path, expected_groups=None, record_map=None,
             settings = xml(z.read('word/settings.xml')) if 'word/settings.xml' in z.namelist() else ET.Element('empty')
     except (BadZipFile, KeyError, ET.ParseError, ValueError) as e:
         errors.append(str(e)); return result
+    try:
+        field_structure(doc)
+    except ValueError as exc:
+        errors.append(str(exc))
     style_map = {s.get(W+'styleId'): s for s in styles.iter(W+'style')}
     def style_align(sid, seen=None):
         seen = set() if seen is None else seen
@@ -168,6 +173,9 @@ def audit_document(path: Path, expected_groups=None, record_map=None,
                 if record is None: raise ValueError('Missing embedded record')
                 if record.findtext('rec-number')!=str(n): raise ValueError('Embedded record ID mismatch')
                 keys=[{'app':k.get('app'),'db_id':k.get('db-id'),'record_id':k.text} for k in record.findall('foreign-keys/key')]
+                if any(not k['db_id'] or k['record_id'] != str(n)
+                       for k in keys if k['app']=='EN'):
+                    raise ValueError('Malformed additional EndNote database identity')
                 en=[k for k in keys if k['app']=='EN' and k['db_id'] and k['record_id']==str(n)]
                 if len(en)!=1: raise ValueError('Missing/ambiguous EndNote database identity')
                 item={'native_record_id':n,'label':label,'foreign_keys':keys,'doi':doi(record.findtext('electronic-resource-num',''))}

@@ -50,6 +50,11 @@ class EndNoteAuditTests(unittest.TestCase):
         self.assertFalse(self.audit(field(base64.b64encode(b'<Other/>').decode()))['passed'])
     def test_unknown_library_not_verified(self):
         self.assertFalse(self.audit(field())['library_identity_verified'])
+    def test_malformed_additional_en_key_is_structured_failure(self):
+        raw=base64.b64decode(payload()).replace(b'</foreign-keys>',b'<key app="EN">999</key></foreign-keys>')
+        r=self.audit(field(base64.b64encode(raw).decode()))
+        self.assertFalse(r['passed'])
+        self.assertTrue(any('Invalid citation payload' in e for e in r['errors']))
     def test_wrong_database(self):
         r=self.audit(field(),record_map={'database_id':'wrong','records':[{'native_record_id':7,'manuscript_reference':1}]})
         self.assertFalse(r['passed'])

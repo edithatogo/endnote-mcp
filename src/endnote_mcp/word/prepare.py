@@ -8,7 +8,9 @@ Citation-plan JSON schema (all indices zero-based in main-document traversal):
  {"paragraph_index": 1, "original_text": "Exact literal paragraph", "remove": true}]}
 
 Each citation anchor identifies exactly one occurrence within a single w:t in
-its indexed run. Bibliography removal requires exact whole-paragraph text and
+its indexed run. Distinct nonoverlapping spans may share a text node; repeated
+authentic tokens are permitted. All citations must share one database_id, which
+is retained with per-anchor record/token bindings in the receipt. Bibliography removal requires exact whole-paragraph text and
 explicit remove=true. Fields, content controls and human revisions cannot be
 edited. Unmodified ZIP part bytes are preserved, including comments and rels.
 """
@@ -16,7 +18,7 @@ from pathlib import Path
 import re
 from zipfile import ZipFile, BadZipFile
 from lxml import etree
-from .models import W, parse_xml, sha256, text
+from .models import W, parse_xml, sha256, text, field_structure
 
 
 def prepare_conversion(source: Path, destination: Path, plan: dict,
@@ -51,19 +53,7 @@ def prepare_conversion(source: Path, destination: Path, plan: dict,
         if tag in ('ins', 'del', 'moveFrom', 'moveTo') or tag.endswith('PrChange'):
             raise ValueError('Existing human revisions require reconciliation')
     paragraphs = list(doc.iter(W+'p'))
-    # Mark every node inside any complex field, including cross-paragraph fields.
-    depth = 0
-    field_nodes = set()
-    for e in doc.iter():
-        if e.tag == W+'fldChar':
-            kind = e.get(W+'fldCharType')
-            if kind == 'begin': depth += 1
-            elif kind == 'end':
-                if depth == 0: raise ValueError('Malformed complex field')
-                field_nodes.add(e)
-                depth -= 1
-        if depth: field_nodes.add(e)
-    if depth: raise ValueError('Unclosed complex field')
+    field_nodes = field_structure(doc)
     def indexed(items, index):
         if type(index) is not int or index < 0 or index >= len(items):
             raise ValueError('Invalid anchor index')
@@ -72,8 +62,9 @@ def prepare_conversion(source: Path, destination: Path, plan: dict,
         return any(e in field_nodes or e.tag in (W+'fldSimple', W+'sdt')
                    for e in list(node.iter()) + list(node.iterancestors()))
     changes = []
-    occupied = set()
-    tokens = set()
+    occupied = {}
+    database_id = None
+    bindings = []
     for c in citations:
         if not isinstance(c, dict): raise ValueError('Invalid citation anchor')
         p = indexed(paragraphs, c.get('paragraph_index'))
@@ -86,18 +77,24 @@ def prepare_conversion(source: Path, destination: Path, plan: dict,
             raise ValueError('Incomplete citation identity or text')
         if not re.fullmatch(r'\{[^{}\n]*#' + str(c['native_record_id']) + r'\}', token):
             raise ValueError('Temporary token must match native record identity')
-        if token in tokens or token in text(doc):
-            raise ValueError('Temporary token must be unique and absent from source')
-        tokens.add(token)
+        if database_id is None: database_id = c['database_id']
+        if c['database_id'] != database_id:
+            raise ValueError('Mixed database scope is unsupported')
+        bindings.append({key:c[key] for key in ('database_id', 'native_record_id',
+                        'temporary_token', 'paragraph_index', 'run_index')})
         if protected(run): raise ValueError('Citation anchor overlaps field or content control')
         nodes = list(run.iter(W+'t'))
         matches = [(n, (n.text or '').count(original)) for n in nodes]
         if sum(count for _, count in matches) != 1:
             raise ValueError('Missing or ambiguous citation anchor')
         node = next(n for n, count in matches if count)
-        if node in occupied: raise ValueError('Duplicate/overlapping citation anchors')
-        occupied.add(node)
-        changes.append((node, original, token))
+        start = node.text.index(original)
+        end = start + len(original)
+        spans = occupied.setdefault(node, [])
+        if any(start < right and end > left for left, right, _ in spans):
+            raise ValueError('Duplicate/overlapping citation anchors')
+        spans.append((start, end, token))
+        changes.append((node, start, end, token))
     removals = []
     for b in bibliography:
         if not isinstance(b, dict) or b.get('remove') is not True:
@@ -108,8 +105,11 @@ def prepare_conversion(source: Path, destination: Path, plan: dict,
                 or any(n in occupied for n in p.iter())):
             raise ValueError('Ambiguous or protected bibliography paragraph')
         removals.append(p)
-    for node, original, token in changes:
-        node.text = node.text.replace(original, token, 1)
+    for node, spans in occupied.items():
+        value = node.text
+        for start, end, token in sorted(spans, reverse=True):
+            value = value[:start] + token + value[end:]
+        node.text = value
     for p in removals: p.getparent().remove(p)
     parts['word/document.xml'] = etree.tostring(doc, encoding='UTF-8', xml_declaration=True)
     # Recheck source just before creating output. Exclusive creation also rejects
@@ -130,5 +130,6 @@ def prepare_conversion(source: Path, destination: Path, plan: dict,
     return {'stage':'prepared', 'status':'prepared', 'source_sha256':digest,
             'destination_sha256':sha256(destination.read_bytes()),
             'native_fields_created':False, 'citation_count':len(changes),
+            'database_id':database_id, 'citation_bindings':bindings,
             'bibliography_paragraphs_removed':len(removals),
             'limitations':['Temporary citations only; native conversion has not run.']}

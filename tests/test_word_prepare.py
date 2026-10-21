@@ -69,3 +69,66 @@ def test_more_preflight_guards(tmp_path,change):
     if change=='symlink': d.symlink_to(s)
     with pytest.raises(ValueError): prepare_conversion(s,d,p,h)
     assert hashlib.sha256(s.read_bytes()).hexdigest()==h
+
+def rewrite_source(source, plan, old, new):
+    with ZipFile(source) as z: parts={n:z.read(n) for n in z.namelist()}
+    parts['word/document.xml']=parts['word/document.xml'].replace(old,new)
+    with ZipFile(source,'w') as z:
+        for n,v in parts.items(): z.writestr(n,v)
+    digest=hashlib.sha256(source.read_bytes()).hexdigest()
+    plan['source_sha256']=digest
+    return digest
+
+@pytest.mark.parametrize('same_record',[True,False])
+def test_distinct_spans_and_repeated_authentic_token(tmp_path,same_record):
+    s,h,p=fixture(tmp_path); d=tmp_path/'new.docx'
+    h=rewrite_source(s,p,b'Example [1].',b'First [1], then [2].')
+    second=dict(p['citations'][0],original_text='[2]')
+    if not same_record:
+        second.update(native_record_id=8,temporary_token='{Other, 2021 #8}')
+    p['citations'].append(second)
+    receipt=prepare_conversion(s,d,p,h)
+    assert receipt['database_id']=='fictional'
+    assert receipt['citation_bindings']==[{'database_id':c['database_id'],'native_record_id':c['native_record_id'],'temporary_token':c['temporary_token'],'paragraph_index':0,'run_index':0} for c in p['citations']]
+    with ZipFile(d) as z:
+        xml=z.read('word/document.xml').decode()
+        assert 'First '+p['citations'][0]['temporary_token']+', then '+second['temporary_token']+'.' in xml
+
+@pytest.mark.parametrize('record',[7,8])
+def test_mixed_library_rejected(tmp_path,record):
+    s,h,p=fixture(tmp_path); d=tmp_path/'new.docx'
+    h=rewrite_source(s,p,b'Example [1].',b'First [1], then [2].')
+    p['citations'].append(dict(p['citations'][0],original_text='[2]',database_id='other',native_record_id=record,temporary_token='{Other, 2021 #'+str(record)+'}'))
+    with pytest.raises(ValueError,match='database'): prepare_conversion(s,d,p,h)
+    assert not d.exists()
+
+@pytest.mark.parametrize('fragment',[
+    '<w:fldChar w:fldCharType="separate"/>',
+    '<w:fldChar w:fldCharType="unknown"/>',
+    '<w:fldChar w:fldCharType="begin"/><w:fldChar w:fldCharType="separate"/><w:fldChar w:fldCharType="separate"/><w:fldChar w:fldCharType="end"/>',
+    '<w:instrText>ORPHAN</w:instrText>',
+    '<w:fldData>ORPHAN</w:fldData>',
+    '<w:fldChar w:fldCharType="begin"/><w:fldChar w:fldCharType="separate"/><w:instrText>LATE</w:instrText><w:fldChar w:fldCharType="end"/>',
+    '<w:fldChar w:fldCharType="begin"/><w:fldChar w:fldCharType="end"/>',
+])
+def test_all_malformed_field_phases_rejected(tmp_path,fragment):
+    s,h,p=fixture(tmp_path); d=tmp_path/'new.docx'
+    h=rewrite_source(s,p,b'</w:body>',('<w:p><w:r>'+fragment+'</w:r></w:p></w:body>').encode())
+    with pytest.raises(ValueError): prepare_conversion(s,d,p,h)
+    assert not d.exists()
+
+def test_overlapping_spans_rejected(tmp_path):
+    s,h,p=fixture(tmp_path);d=tmp_path/'new.docx'
+    p['citations'].append(dict(p['citations'][0],original_text='Example [1]'))
+    with pytest.raises(ValueError,match='overlap'): prepare_conversion(s,d,p,h)
+    assert not d.exists()
+
+def test_repeated_authentic_token_in_separate_paragraphs(tmp_path):
+    s,h,p=fixture(tmp_path);d=tmp_path/'new.docx'
+    h=rewrite_source(s,p,b'Literal reference',b'Again [1].')
+    p['bibliography_paragraphs']=[]
+    p['citations'].append(dict(p['citations'][0],paragraph_index=1))
+    receipt=prepare_conversion(s,d,p,h)
+    assert receipt['citation_count']==2
+    with ZipFile(d) as z:
+        assert z.read('word/document.xml').count(b'{Example, 2020 #7}')==2
